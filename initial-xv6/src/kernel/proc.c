@@ -152,6 +152,7 @@ found:
   p->rtime = 0;
   p->etime = 0;
   p->ctime = ticks;
+  memset(p->syscall_count, 0, sizeof(p->syscall_count)); 
   return p;
 }
 
@@ -770,4 +771,18 @@ void update_time()
     }
     release(&p->lock);
   }
+}
+
+int get_syscall_count(int mask) 
+{
+    struct proc *p = myproc();
+    int syscall_num = 0;
+
+    while (mask > 1) 
+    {
+        mask >>= 1;
+        syscall_num++;
+    }
+
+    return p->syscall_count[syscall_num];
 }

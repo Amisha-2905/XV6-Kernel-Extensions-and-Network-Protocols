@@ -503,3 +503,13 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_getsyscount(void)
+{
+    struct proc *p = myproc();
+    int mask = p->trapframe->a0;
+
+    int count = get_syscall_count(mask);
+    return count;
+}
