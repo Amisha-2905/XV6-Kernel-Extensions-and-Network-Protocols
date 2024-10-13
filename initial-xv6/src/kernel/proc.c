@@ -152,7 +152,12 @@ found:
   p->rtime = 0;
   p->etime = 0;
   p->ctime = ticks;
-  memset(p->syscall_count, 0, sizeof(p->syscall_count)); 
+  p->alarm_handle = 0;
+  p->ticks = 0;
+  p->tick_counter = 0;
+  p->alarmhandler = 0;
+  p->saved_tf = 0;
+  memset(p->syscall_count, 0, sizeof(p->syscall_count));
   return p;
 }
 
@@ -290,7 +295,8 @@ int fork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
-
+  int p_alarm_interval;
+  uint64 p_alarm_handler; 
   // Allocate process.
   if ((np = allocproc()) == 0)
   {
@@ -327,7 +333,17 @@ int fork(void)
   acquire(&wait_lock);
   np->parent = p;
   release(&wait_lock);
+  acquire(&p->lock);
+  // copy alarm interval and handler over
+  p_alarm_interval = p->ticks;
+  p_alarm_handler = p->alarmhandler;
+  release(&p->lock);
 
+  acquire(&np->lock);
+  np->ticks = p_alarm_interval;
+  np->alarmhandler = p_alarm_handler;
+
+  release(&np->lock);
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -773,16 +789,16 @@ void update_time()
   }
 }
 
-int get_syscall_count(int mask) 
+int get_syscall_count(int mask)
 {
-    struct proc *p = myproc();
-    int syscall_num = 0;
+  struct proc *p = myproc();
+  int syscall_num = 0;
 
-    while (mask > 1) 
-    {
-        mask >>= 1;
-        syscall_num++;
-    }
+  while (mask > 1)
+  {
+    mask >>= 1;
+    syscall_num++;
+  }
 
-    return p->syscall_count[syscall_num];
+  return p->syscall_count[syscall_num];
 }

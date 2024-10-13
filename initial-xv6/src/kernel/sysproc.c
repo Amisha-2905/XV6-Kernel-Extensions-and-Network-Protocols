@@ -108,3 +108,54 @@ sys_waitx(void)
     return -1;
   return ret;
 }
+
+int is_valid_user_addr(uint64 addr)
+{
+  struct proc *p = myproc();
+  if (addr >= MAXVA || addr == 0)
+  {
+    return 0;
+  }
+  pte_t *pte = walk(p->pagetable, addr, 0);
+  if (pte == 0)
+  {
+    return 0;
+  }
+  return 1;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler;
+
+  argint(0, &interval);
+  argaddr(1, &handler);
+  struct proc *p = myproc();
+  if (handler != 0 && !is_valid_user_addr(handler))
+  {
+    return -1;
+  }
+  p->ticks = interval;
+  p->tick_counter = 0;
+  p->alarmhandler = handler;
+  p->alarm_handle = 0;
+
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  if (p->saved_tf == 0)
+  {
+    return -1;
+  }
+  memmove(p->trapframe, p->saved_tf, sizeof(struct trapframe));
+  kfree(p->saved_tf);
+  p->saved_tf = 0;
+  p->alarm_handle = 0;
+  return p->trapframe->a0;
+}

@@ -57,6 +57,10 @@ char *syscall_name(int mask)
                 return "waitx";
             case 23:
                 return "getsyscount";
+            case 24:
+                return "sigalarm";
+            case 25:
+                return "sigreturn";
             default:
                 return "unknown";
             }

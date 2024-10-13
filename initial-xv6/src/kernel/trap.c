@@ -80,8 +80,28 @@ void usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2)
+  {
+    if (p->ticks > 0 && p->alarm_handle == 0)
+    {
+      p->tick_counter++;
+      if (p->tick_counter >= p->ticks)
+      {
+        p->alarm_handle = 1;
+        if (p->saved_tf == 0)
+        {
+          p->saved_tf = kalloc();
+          if (p->saved_tf == 0)
+          {
+            panic("kalloc failed!\n");
+          }
+        }
+        memmove(p->saved_tf, p->trapframe, sizeof(struct trapframe));
+        p->trapframe->epc = (uint64)p->alarmhandler;
+        p->tick_counter = 0;
+      }
+    }
     yield();
-
+  }
   usertrapret();
 }
 
