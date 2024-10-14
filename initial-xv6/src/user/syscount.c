@@ -61,6 +61,8 @@ char *syscall_name(int mask)
                 return "sigalarm";
             case 25:
                 return "sigreturn";
+            case 26:
+                return "settickets";
             default:
                 return "unknown";
             }

@@ -159,3 +159,18 @@ sys_sigreturn(void)
   p->alarm_handle = 0;
   return p->trapframe->a0;
 }
+
+uint64 sys_settickets(void)
+{
+  int n;
+  argint(0, &n);
+#ifdef LBS
+  if (n < 1)
+  {
+    return -1;
+  }
+  struct proc *p = myproc();
+  p->tickets = n;
+#endif
+  return 0;
+}

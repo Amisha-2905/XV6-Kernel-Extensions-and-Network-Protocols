@@ -29,6 +29,47 @@ struct spinlock wait_lock;
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
+
+// from FreeBSD.
+int do_rand(unsigned long *ctx)
+{
+  /*
+   * Compute x = (7^5 * x) mod (2^31 - 1)
+   * without overflowing 31 bits:
+   *      (2^31 - 1) = 127773 * (7^5) + 2836
+   * From "Random number generators: good ones are hard to find",
+   * Park and Miller, Communications of the ACM, vol. 31, no. 10,
+   * October 1988, p. 1195.
+   */
+  long hi, lo, x;
+
+  /* Transform to [1, 0x7ffffffe] range. */
+  x = (*ctx % 0x7ffffffe) + 1;
+  hi = x / 127773;
+  lo = x % 127773;
+  x = 16807 * lo - 2836 * hi;
+  if (x < 0)
+    x += 0x7fffffff;
+  /* Transform to [0, 0x7ffffffd] range. */
+  x--;
+  *ctx = x;
+  return (x);
+}
+
+unsigned long rand_next = 1;
+
+int rand(void)
+{
+  return (do_rand(&rand_next));
+}
+
+int random_at_most(int max)
+{
+  if (max <= 0)
+    return 1;
+  return (rand() % max) + 1;
+}
+
 void proc_mapstacks(pagetable_t kpgtbl)
 {
   struct proc *p;
@@ -158,6 +199,10 @@ found:
   p->alarmhandler = 0;
   p->saved_tf = 0;
   memset(p->syscall_count, 0, sizeof(p->syscall_count));
+#ifdef LBS
+  p->tickets = 1;
+  p->arrival_time = ticks;
+#endif
   return p;
 }
 
@@ -296,7 +341,7 @@ int fork(void)
   struct proc *np;
   struct proc *p = myproc();
   int p_alarm_interval;
-  uint64 p_alarm_handler; 
+  uint64 p_alarm_handler;
   // Allocate process.
   if ((np = allocproc()) == 0)
   {
@@ -333,17 +378,19 @@ int fork(void)
   acquire(&wait_lock);
   np->parent = p;
   release(&wait_lock);
+
   acquire(&p->lock);
-  // copy alarm interval and handler over
   p_alarm_interval = p->ticks;
   p_alarm_handler = p->alarmhandler;
   release(&p->lock);
-
   acquire(&np->lock);
   np->ticks = p_alarm_interval;
   np->alarmhandler = p_alarm_handler;
-
+#ifdef LBS
+  np->tickets = p->tickets;
+#endif
   release(&np->lock);
+
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -475,12 +522,67 @@ int wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+void lbs_scheduler(void) __attribute__((noreturn));
+
+void lbs_scheduler(void)
+{
+#ifdef LBS
+  struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+
+  for (;;)
+  {
+    intr_on();
+    int total_tickets = 0;
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE)
+      {
+        total_tickets += p->tickets;
+      }
+      release(&p->lock);
+    }
+    if (total_tickets == 0)
+    {
+      continue;
+    }
+    int winning_ticket = random_at_most(total_tickets);
+    // printf("%d ", winning_ticket);
+    int current_ticket = 0;
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE)
+      {
+        current_ticket += p->tickets;
+        if (current_ticket >= winning_ticket)
+        {
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+        }
+      }
+      release(&p->lock);
+    }
+  }
+#endif
+}
+
+void scheduler(void) __attribute__((noreturn));
+
 void scheduler(void)
 {
-  struct proc *p;
   struct cpu *c = mycpu();
 
   c->proc = 0;
+#ifdef LBS
+  lbs_scheduler(); // Call the Lottery-Based Scheduler
+#else
+  struct proc *p;
   for (;;)
   {
     // Avoid deadlock by ensuring that devices can interrupt.
@@ -505,6 +607,7 @@ void scheduler(void)
       release(&p->lock);
     }
   }
+#endif
 }
 
 // Switch to scheduler.  Must hold only p->lock
@@ -705,7 +808,6 @@ void procdump(void)
       [ZOMBIE] "zombie"};
   struct proc *p;
   char *state;
-
   printf("\n");
   for (p = proc; p < &proc[NPROC]; p++)
   {
@@ -716,6 +818,9 @@ void procdump(void)
     else
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
+#ifdef LBS
+    printf("ticket = %d arrival = %d ", p->tickets, p->arrival_time);
+#endif
     printf("\n");
   }
 }

@@ -103,7 +103,7 @@ struct proc
   int killed;           // If non-zero, have been killed
   int xstate;           // Exit status to be returned to parent's wait
   int pid;              // Process ID
-  int syscall_count[31]; 
+  int syscall_count[31];
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
 
@@ -124,6 +124,10 @@ struct proc
   int alarm_handle;
   uint64 alarmhandler;
   struct trapframe *saved_tf;
+#ifdef LBS
+  int tickets;
+  uint64 arrival_time;
+#endif
 };
 
 extern struct proc proc[NPROC];
