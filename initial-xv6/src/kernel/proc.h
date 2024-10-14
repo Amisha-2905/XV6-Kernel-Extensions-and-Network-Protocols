@@ -128,6 +128,11 @@ struct proc
   int tickets;
   uint64 arrival_time;
 #endif
+#ifdef MLFQ
+  int priority;
+  int time_slice;
+  int boost_tick; 
+#endif
 };
 
 extern struct proc proc[NPROC];

@@ -100,6 +100,13 @@ void usertrap(void)
         p->tick_counter = 0;
       }
     }
+#ifdef MLFQ
+    p->ticks_used++;
+    if (p->ticks_used >= p->time_slice)
+    {
+      yield();
+    }
+#endif
     yield();
   }
   usertrapret();
@@ -173,7 +180,16 @@ void kerneltrap()
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+  {
+#ifdef MLFQ
+    myproc()->ticks_used++;
+    if (myproc()->ticks_used >= myproc()->time_slice)
+    {
+      yield();
+    }
+#endif
     yield();
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -186,20 +202,37 @@ void clockintr()
   acquire(&tickslock);
   ticks++;
   update_time();
-  // for (struct proc *p = proc; p < &proc[NPROC]; p++)
-  // {
-  //   acquire(&p->lock);
-  //   if (p->state == RUNNING)
-  //   {
-  //     printf("here");
-  //     p->rtime++;
-  //   }
-  //   // if (p->state == SLEEPING)
-  //   // {
-  //   //   p->wtime++;
-  //   // }
-  //   release(&p->lock);
-  // }
+// for (struct proc *p = proc; p < &proc[NPROC]; p++)
+// {
+//   acquire(&p->lock);
+//   if (p->state == RUNNING)
+//   {
+//     printf("here");
+//     p->rtime++;
+//   }
+//   // if (p->state == SLEEPING)
+//   // {
+//   //   p->wtime++;
+//   // }
+//   release(&p->lock);
+// }
+#ifdef MLFQ
+  if (ticks % 48 == 0) // Perform priority boosting every 48 ticks
+  {
+    struct proc *p;
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state != UNUSED)
+      {
+        p->priority = 0;   // Move process to highest priority queue
+        p->time_slice = 1; // Reset time slice for priority 0
+        p->ticks_used = 0; // Reset the used ticks
+      }
+      release(&p->lock);
+    }
+  }
+#endif
   wakeup(&ticks);
   release(&tickslock);
 }

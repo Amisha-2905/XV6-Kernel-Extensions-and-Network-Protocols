@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#define NQUEUE 4
+
+struct proc *queue[NQUEUE][NPROC];
+int queue_size[NQUEUE];
 
 struct cpu cpus[NCPU];
 
@@ -31,6 +35,47 @@ struct spinlock wait_lock;
 // guard page.
 
 // from FreeBSD.
+void push_to_queue(struct proc *p, int priority)
+{
+#ifdef MLFQ
+  queue[priority][queue_size[priority]++] = p;
+  p->priority = priority;
+#endif
+}
+
+struct proc *pop_from_queue(int priority)
+{
+  if (queue_size[priority] == 0)
+    return 0;
+
+  struct proc *p = queue[priority][0];
+  for (int i = 0; i < queue_size[priority] - 1; i++)
+  {
+    queue[priority][i] = queue[priority][i + 1];
+  }
+  queue_size[priority]--;
+  return p;
+}
+
+void boost_priority(void)
+{
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    acquire(&p->lock);
+    if (p->state == RUNNABLE)
+    {
+#ifdef MLFQ
+      p->priority = 0;
+      p->time_slice = 1;
+      p->ticks_used = 0;
+      push_to_queue(p, 0);
+#endif
+    }
+    release(&p->lock);
+  }
+}
+
 int do_rand(unsigned long *ctx)
 {
   /*
@@ -97,6 +142,12 @@ void procinit(void)
     p->state = UNUSED;
     p->kstack = KSTACK((int)(p - proc));
   }
+#ifdef MLFQ
+  for (int i = 0; i < NQUEUE; i++)
+  {
+    queue_size[i] = 0;
+  }
+#endif
 }
 
 // Must be called with interrupts disabled,
@@ -203,6 +254,11 @@ found:
   p->tickets = 1;
   p->arrival_time = ticks;
 #endif
+#ifdef MLFQ
+  p->priority = 0;
+  p->time_slice = 1;
+  p->ticks_used = 0;
+#endif
   return p;
 }
 
@@ -212,6 +268,24 @@ found:
 static void
 freeproc(struct proc *p)
 {
+#ifdef MLFQ
+  for (int i = 0; i < NQUEUE; i++)
+  {
+    for (int j = 0; j < queue_size[i]; j++)
+    {
+      if (queue[i][j] == p)
+      {
+        // Shift remaining processes up
+        for (int k = j; k < queue_size[i] - 1; k++)
+        {
+          queue[i][k] = queue[i][k + 1];
+        }
+        queue_size[i]--;
+        break;
+      }
+    }
+  }
+#endif
   if (p->trapframe)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
@@ -389,12 +463,15 @@ int fork(void)
 #ifdef LBS
   np->tickets = p->tickets;
 #endif
-  release(&np->lock);
-
-  acquire(&np->lock);
+#ifdef MLFQ
+  np->priority = 0;
+  np->time_slice = 1;
+  np->ticks_used = 0;
+  push_to_queue(np, np->priority);
+#endif
   np->state = RUNNABLE;
   release(&np->lock);
-
+  
   return pid;
 }
 
@@ -572,6 +649,88 @@ void lbs_scheduler(void)
 #endif
 }
 
+void mlfq_scheduler(void)
+{
+#ifdef MLFQ
+  struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+
+  int boost_interval = 48; // Number of ticks after which all processes are boosted
+  int total_ticks = 0;     // Total number of ticks since the last priority boost
+
+  for (;;)
+  {
+    intr_on(); // Enable interrupts on this CPU
+
+    // Priority Boosting: Every 48 ticks, move all processes to priority 0.
+    if (total_ticks >= boost_interval)
+    {
+      total_ticks = 0;
+      for (int i = 1; i < NQUEUE; i++)
+      {
+        while (queue_size[i] > 0)
+        {
+          p = pop_from_queue(i);
+          push_to_queue(p, 0); // Move all processes to queue 0
+          p->priority = 0;
+          p->time_slice = 1;
+          p->ticks_used = 0;
+        }
+      }
+    }
+
+    // Find the highest priority queue with a runnable process
+    for (int i = 0; i < NQUEUE; i++)
+    {
+      if (queue_size[i] > 0)
+      {
+        p = pop_from_queue(i);
+        acquire(&p->lock);
+
+        if (p->state == RUNNABLE)
+        {
+          c->proc = p;
+          p->state = RUNNING;
+
+          // Switch to the process and run it
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+
+          // Handle time slice expiration
+          p->ticks_used++;
+          if (p->ticks_used >= p->time_slice)
+          {
+            // Move to a lower priority queue if time slice is exhausted
+            if (p->priority < 3)
+            {
+              push_to_queue(p, p->priority + 1);
+              p->priority++;
+              p->time_slice = (p->priority == 1) ? 4 : (p->priority == 2) ? 8
+                                                                          : 16;
+            }
+            else
+            {
+              push_to_queue(p, 3); // Stay in lowest queue
+            }
+            p->ticks_used = 0;
+          }
+          else
+          {
+            // Reinsert in the same queue if time slice is not exhausted
+            push_to_queue(p, p->priority);
+          }
+        }
+        release(&p->lock);
+        break; // Only schedule one process at a time
+      }
+    }
+
+    total_ticks++;
+  }
+#endif
+}
+
 void scheduler(void) __attribute__((noreturn));
 
 void scheduler(void)
@@ -580,7 +739,9 @@ void scheduler(void)
 
   c->proc = 0;
 #ifdef LBS
-  lbs_scheduler(); // Call the Lottery-Based Scheduler
+  lbs_scheduler();
+#elif defined(MLFQ)
+  mlfq_scheduler();
 #else
   struct proc *p;
   for (;;)
@@ -641,7 +802,31 @@ void yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
+#ifdef MLFQ
+  if (p->ticks_used >= p->time_slice)
+  {
+    if (p->priority < 3)
+    {
+      p->priority++;
+    }
+    if (p->priority == 1)
+    {
+      p->time_slice = 4;
+    }
+    else if (p->priority == 2)
+    {
+      p->time_slice = 8;
+    }
+    else if (p->priority == 3)
+    {
+      p->time_slice = 16;
+    }
+    p->ticks_used = 0;
+  }
+  push_to_queue(p, p->priority);
+#else
   p->state = RUNNABLE;
+#endif
   sched();
   release(&p->lock);
 }

@@ -61,6 +61,7 @@
   "files.associations": {
     "inet.h": "c",
     "time.h": "c",
-    "socket.h": "c"
+    "socket.h": "c",
+    "cstdlib": "c"
   }
 }
