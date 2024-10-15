@@ -34,14 +34,33 @@ struct spinlock wait_lock;
 // Map it high in memory, followed by an invalid
 // guard page.
 
-// from FreeBSD.
-void push_to_queue(struct proc *p, int priority)
-{
-#ifdef MLFQ
+int is_in_queue(struct proc *p, int priority) {
+  for (int i = 0; i < queue_size[priority]; i++) {
+    if (queue[priority][i] == p) {
+      return 1; // Found in queue
+    }
+  }
+  return 0;
+}
+
+void push_to_queue(struct proc *p, int priority) {
+  if (queue_size[priority] >= NPROC) {
+    // printf("Queue overflow in priority %d for process PID: %d\n", priority, p->pid);
+    procdump();  // Dump process info for all processes
+    panic("Queue overflow");
+  }
+  
+  if (is_in_queue(p, priority)) {
+    // printf("Process PID: %d is already in priority %d queue. Skipping insertion.\n", p->pid, priority);
+    return;
+  }
+  
   queue[priority][queue_size[priority]++] = p;
   p->priority = priority;
-#endif
+  p->time_slice = (priority == 0) ? 1 : (1 << (2 * priority));
 }
+
+
 
 struct proc *pop_from_queue(int priority)
 {
@@ -49,11 +68,16 @@ struct proc *pop_from_queue(int priority)
     return 0;
 
   struct proc *p = queue[priority][0];
+  if ((uint64)p->trapframe % sizeof(uint64) != 0)
+  {
+    panic("pop_from_queue: Misaligned trapframe");
+  }
   for (int i = 0; i < queue_size[priority] - 1; i++)
   {
     queue[priority][i] = queue[priority][i + 1];
   }
   queue_size[priority]--;
+  // printf("PID: %d,Priority: %d,Number of ticks: %d\n", p->pid, p->priority, p->ticks_used);
   return p;
 }
 
@@ -65,12 +89,10 @@ void boost_priority(void)
     acquire(&p->lock);
     if (p->state == RUNNABLE)
     {
-#ifdef MLFQ
       p->priority = 0;
       p->time_slice = 1;
       p->ticks_used = 0;
       push_to_queue(p, 0);
-#endif
     }
     release(&p->lock);
   }
@@ -258,6 +280,7 @@ found:
   p->priority = 0;
   p->time_slice = 1;
   p->ticks_used = 0;
+  // printf("PID: %d,Priority: %d,Number of ticks: %d\n", p->pid, p->priority, p->ticks_used);
 #endif
   return p;
 }
@@ -464,14 +487,14 @@ int fork(void)
   np->tickets = p->tickets;
 #endif
 #ifdef MLFQ
-  np->priority = 0;
-  np->time_slice = 1;
+  np->priority = p->priority;
+  np->time_slice = p->time_slice;
   np->ticks_used = 0;
   push_to_queue(np, np->priority);
 #endif
   np->state = RUNNABLE;
   release(&np->lock);
-  
+
   return pid;
 }
 
@@ -604,7 +627,7 @@ void lbs_scheduler(void) __attribute__((noreturn));
 
 void lbs_scheduler(void)
 {
-#ifdef LBS
+  // #ifdef LBS
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
@@ -646,103 +669,90 @@ void lbs_scheduler(void)
       release(&p->lock);
     }
   }
-#endif
+  // #endif
 }
+
+void mlfq_scheduler(void) __attribute__((noreturn));
 
 void mlfq_scheduler(void)
 {
-#ifdef MLFQ
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
 
-  int boost_interval = 48; // Number of ticks after which all processes are boosted
-  int total_ticks = 0;     // Total number of ticks since the last priority boost
-
-  for (;;)
+  int total_ticks = 0;
+  while (1)
   {
-    intr_on(); // Enable interrupts on this CPU
+    intr_on();
 
-    // Priority Boosting: Every 48 ticks, move all processes to priority 0.
-    if (total_ticks >= boost_interval)
+    if (total_ticks >= 48)
     {
+      boost_priority();
       total_ticks = 0;
-      for (int i = 1; i < NQUEUE; i++)
-      {
-        while (queue_size[i] > 0)
-        {
-          p = pop_from_queue(i);
-          push_to_queue(p, 0); // Move all processes to queue 0
-          p->priority = 0;
-          p->time_slice = 1;
-          p->ticks_used = 0;
-        }
-      }
     }
 
-    // Find the highest priority queue with a runnable process
     for (int i = 0; i < NQUEUE; i++)
     {
       if (queue_size[i] > 0)
       {
         p = pop_from_queue(i);
+
+        if (p == 0)
+        {
+          continue;
+        }
+
         acquire(&p->lock);
 
-        if (p->state == RUNNABLE)
+        if (p->state != RUNNABLE)
         {
-          c->proc = p;
-          p->state = RUNNING;
-
-          // Switch to the process and run it
-          swtch(&c->context, &p->context);
-          c->proc = 0;
-
-          // Handle time slice expiration
-          p->ticks_used++;
-          if (p->ticks_used >= p->time_slice)
-          {
-            // Move to a lower priority queue if time slice is exhausted
-            if (p->priority < 3)
-            {
-              push_to_queue(p, p->priority + 1);
-              p->priority++;
-              p->time_slice = (p->priority == 1) ? 4 : (p->priority == 2) ? 8
-                                                                          : 16;
-            }
-            else
-            {
-              push_to_queue(p, 3); // Stay in lowest queue
-            }
-            p->ticks_used = 0;
-          }
-          else
-          {
-            // Reinsert in the same queue if time slice is not exhausted
-            push_to_queue(p, p->priority);
-          }
+          release(&p->lock);
+          continue;
         }
+
+        if (p->trapframe == 0 || ((uint64)p->trapframe % sizeof(uint64)) != 0)
+        {
+          release(&p->lock);
+          panic("mlfq_scheduler: Process trapframe is NULL or misaligned");
+        }
+
+        c->proc = p;
+        p->state = RUNNING;
+        swtch(&c->context, &p->context);
+
+        p->ticks_used++;
+        if (p->ticks_used >= p->time_slice)
+        {
+          p->ticks_used = 0;
+          int next_queue = (p->priority < 3) ? p->priority + 1 : 3;
+          push_to_queue(p, next_queue);
+        }
+        else
+        {
+          push_to_queue(p, p->priority);
+        }
+
+        c->proc = 0;
         release(&p->lock);
-        break; // Only schedule one process at a time
+
+        break;
       }
     }
-
     total_ticks++;
   }
-#endif
 }
 
 void scheduler(void) __attribute__((noreturn));
 
 void scheduler(void)
 {
-  struct cpu *c = mycpu();
-
-  c->proc = 0;
 #ifdef LBS
   lbs_scheduler();
 #elif defined(MLFQ)
   mlfq_scheduler();
 #else
+  struct cpu *c = mycpu();
+  c->proc = 0;
   struct proc *p;
   for (;;)
   {
@@ -803,30 +813,9 @@ void yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
 #ifdef MLFQ
-  if (p->ticks_used >= p->time_slice)
-  {
-    if (p->priority < 3)
-    {
-      p->priority++;
-    }
-    if (p->priority == 1)
-    {
-      p->time_slice = 4;
-    }
-    else if (p->priority == 2)
-    {
-      p->time_slice = 8;
-    }
-    else if (p->priority == 3)
-    {
-      p->time_slice = 16;
-    }
-    p->ticks_used = 0;
-  }
-  push_to_queue(p, p->priority);
-#else
-  p->state = RUNNABLE;
+  push_to_queue(p, p->priority); // Push the process to the end of the same queue
 #endif
+  p->state = RUNNABLE;
   sched();
   release(&p->lock);
 }

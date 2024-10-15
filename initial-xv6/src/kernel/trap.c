@@ -104,10 +104,12 @@ void usertrap(void)
     p->ticks_used++;
     if (p->ticks_used >= p->time_slice)
     {
+      p->ticks_used = 0;
       yield();
     }
-#endif
+#else
     yield();
+#endif
   }
   usertrapret();
 }
@@ -185,10 +187,12 @@ void kerneltrap()
     myproc()->ticks_used++;
     if (myproc()->ticks_used >= myproc()->time_slice)
     {
+      myproc()->ticks_used = 0;
       yield();
     }
-#endif
+#else
     yield();
+#endif
   }
 
   // the yield() may have caused some traps to occur,
@@ -217,21 +221,22 @@ void clockintr()
 //   release(&p->lock);
 // }
 #ifdef MLFQ
-  if (ticks % 48 == 0) // Perform priority boosting every 48 ticks
-  {
+if (ticks % 48 == 0) 
+{
     struct proc *p;
     for (p = proc; p < &proc[NPROC]; p++)
     {
-      acquire(&p->lock);
-      if (p->state != UNUSED)
-      {
-        p->priority = 0;   // Move process to highest priority queue
-        p->time_slice = 1; // Reset time slice for priority 0
-        p->ticks_used = 0; // Reset the used ticks
-      }
-      release(&p->lock);
+        acquire(&p->lock);
+        if (p->state == RUNNABLE)
+        {
+            p->priority = 0;
+            p->time_slice = 1;
+            p->ticks_used = 0;
+            push_to_queue(p, 0);
+        }
+        release(&p->lock);
     }
-  }
+}
 #endif
   wakeup(&ticks);
   release(&tickslock);

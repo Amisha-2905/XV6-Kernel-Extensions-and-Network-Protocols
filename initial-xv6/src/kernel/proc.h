@@ -124,15 +124,15 @@ struct proc
   int alarm_handle;
   uint64 alarmhandler;
   struct trapframe *saved_tf;
-#ifdef LBS
+// #ifdef LBS
   int tickets;
   uint64 arrival_time;
-#endif
-#ifdef MLFQ
+// #endif
+// #ifdef MLFQ
   int priority;
   int time_slice;
-  int boost_tick; 
-#endif
+  int ticks_used; 
+// #endif
 };
 
 extern struct proc proc[NPROC];

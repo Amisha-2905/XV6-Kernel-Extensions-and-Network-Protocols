@@ -114,7 +114,7 @@ int main(int argc, char *argv[])
             char *command = syscall_name(mask);
             if (strcmp("invalid", command) != 0)
             {
-                printf("PID %d called %s %d times.\n", pid, syscall_name(mask), count);
+                printf("PID %d called %s %d times.\n", pid, command, count);
                 exit(0);
             }
             else
