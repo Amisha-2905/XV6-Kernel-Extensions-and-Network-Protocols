@@ -20,7 +20,7 @@ int main()
     {
       if (n < IO)
       {
-        sleep(200); // IO bound processes
+        sleep(100); // IO bound processes
       }
       else
       {

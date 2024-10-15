@@ -34,33 +34,42 @@ struct spinlock wait_lock;
 // Map it high in memory, followed by an invalid
 // guard page.
 
-int is_in_queue(struct proc *p, int priority) {
-  for (int i = 0; i < queue_size[priority]; i++) {
-    if (queue[priority][i] == p) {
+void log_queue_transition(int pid, int priority, int time)
+{
+  printf("%d,%d,%d\n", pid, priority, time);
+}
+
+int is_in_queue(struct proc *p, int priority)
+{
+  for (int i = 0; i < queue_size[priority]; i++)
+  {
+    if (queue[priority][i] == p)
+    {
       return 1; // Found in queue
     }
   }
   return 0;
 }
 
-void push_to_queue(struct proc *p, int priority) {
-  if (queue_size[priority] >= NPROC) {
+void push_to_queue(struct proc *p, int priority)
+{
+  if (queue_size[priority] >= NPROC)
+  {
     // printf("Queue overflow in priority %d for process PID: %d\n", priority, p->pid);
-    procdump();  // Dump process info for all processes
+    procdump(); // Dump process info for all processes
     panic("Queue overflow");
   }
-  
-  if (is_in_queue(p, priority)) {
+
+  if (is_in_queue(p, priority))
+  {
     // printf("Process PID: %d is already in priority %d queue. Skipping insertion.\n", p->pid, priority);
     return;
   }
-  
+  log_queue_transition(p->pid, priority, ticks);
   queue[priority][queue_size[priority]++] = p;
   p->priority = priority;
   p->time_slice = (priority == 0) ? 1 : (1 << (2 * priority));
 }
-
-
 
 struct proc *pop_from_queue(int priority)
 {
@@ -92,6 +101,7 @@ void boost_priority(void)
       p->priority = 0;
       p->time_slice = 1;
       p->ticks_used = 0;
+      log_queue_transition(p->pid, 0, ticks);
       push_to_queue(p, 0);
     }
     release(&p->lock);
@@ -725,10 +735,12 @@ void mlfq_scheduler(void)
         {
           p->ticks_used = 0;
           int next_queue = (p->priority < 3) ? p->priority + 1 : 3;
+          log_queue_transition(p->pid, next_queue, ticks);
           push_to_queue(p, next_queue);
         }
         else
         {
+          log_queue_transition(p->pid, p->priority, ticks);
           push_to_queue(p, p->priority);
         }
 
@@ -813,6 +825,7 @@ void yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
 #ifdef MLFQ
+  log_queue_transition(p->pid, p->priority, ticks);
   push_to_queue(p, p->priority); // Push the process to the end of the same queue
 #endif
   p->state = RUNNABLE;
