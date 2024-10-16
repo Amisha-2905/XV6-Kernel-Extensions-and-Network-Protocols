@@ -695,7 +695,7 @@ void mlfq_scheduler(void)
   {
     intr_on();
 
-    if (total_ticks >= 48)
+    if (total_ticks >= 96)
     {
       boost_priority();
       total_ticks = 0;

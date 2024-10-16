@@ -221,7 +221,7 @@ void clockintr()
 //   release(&p->lock);
 // }
 #ifdef MLFQ
-if (ticks % 48 == 0) 
+if (ticks % 96 == 0) 
 {
     struct proc *p;
     for (p = proc; p < &proc[NPROC]; p++)
